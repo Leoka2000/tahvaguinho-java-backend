@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import jakarta.mail.MessagingException;
 import pt.tahvago.dto.LoginUserDto;
 import pt.tahvago.dto.RegisterUserDto;
+import pt.tahvago.dto.ResetPasswordDto;
 import pt.tahvago.dto.VerifyUserDto;
 import pt.tahvago.exceptions.RegistrationException;
 import pt.tahvago.model.AppUser;
@@ -215,4 +216,20 @@ public class AuthenticationService {
         int code = random.nextInt(900000) + 100000;
         return String.valueOf(code);
     }
+
+
+
+    public void resetPassword(ResetPasswordDto input) {
+    AppUser user = userRepository.findByVerificationCode(input.getCode())
+            .orElseThrow(() -> new RuntimeException("Invalid reset code"));
+
+    if (user.getVerificationCodeExpiresAt().isBefore(LocalDateTime.now())) {
+        throw new RuntimeException("Reset code has expired");
+    }
+
+    user.setPassword(passwordEncoder.encode(input.getNewPassword()));
+    user.setVerificationCode(null);
+    user.setVerificationCodeExpiresAt(null);
+    userRepository.save(user);
+}
 }

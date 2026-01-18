@@ -15,11 +15,13 @@ import pt.tahvago.dto.ForgotPasswordDto;
 import pt.tahvago.dto.LoginResponse;
 import pt.tahvago.dto.LoginUserDto;
 import pt.tahvago.dto.RegisterUserDto;
+import pt.tahvago.dto.ResetPasswordDto;
 import pt.tahvago.dto.VerifyUserDto;
 import pt.tahvago.exceptions.RegistrationException;
 import pt.tahvago.model.AppUser;
 import pt.tahvago.service.AuthenticationService;
 import pt.tahvago.service.JwtService;
+
 
 @RestController
 @RequestMapping("/api/auth")
@@ -42,6 +44,16 @@ public class AuthenticationController {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
+    
+    @PostMapping("/reset-password")
+public ResponseEntity<?> resetPassword(@RequestBody ResetPasswordDto resetPasswordDto) {
+    try {
+        authenticationService.resetPassword(resetPasswordDto);
+        return ResponseEntity.ok(Map.of("message", "Password has been reset successfully"));
+    } catch (RuntimeException e) {
+        return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+    }
+}
 
     @PostMapping("/signup")
     public ResponseEntity<?> register(@RequestBody RegisterUserDto registerUserDto) {
