@@ -1,19 +1,23 @@
 package pt.tahvago.service;
+
+import java.time.LocalDateTime;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Random;
+import java.util.concurrent.ConcurrentHashMap;
+
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+
+import jakarta.mail.MessagingException;
 import pt.tahvago.dto.LoginUserDto;
 import pt.tahvago.dto.RegisterUserDto;
 import pt.tahvago.dto.VerifyUserDto;
 import pt.tahvago.exceptions.RegistrationException;
 import pt.tahvago.model.AppUser;
 import pt.tahvago.repository.UserRepository;
-import jakarta.mail.MessagingException;
-import org.springframework.security.authentication.AuthenticationManager;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.stereotype.Service;
-
-import java.time.LocalDateTime;
-import java.util.Optional;
-import java.util.Random;
 
 @Service
 public class AuthenticationService {
@@ -21,6 +25,10 @@ public class AuthenticationService {
     private final PasswordEncoder passwordEncoder;
     private final AuthenticationManager authenticationManager;
     private final EmailService emailService;
+
+    private final Map<String, LockoutInfo> lockoutCache = new ConcurrentHashMap<>();
+    private final int MAX_ATTEMPTS = 2;
+    private final int LOCKOUT_DURATION_MINUTES = 1;
 
     public AuthenticationService(
             UserRepository userRepository,
@@ -34,38 +42,76 @@ public class AuthenticationService {
         this.emailService = emailService;
     }
 
-   public AppUser signup(RegisterUserDto input) {
-    if (userRepository.findByUsername(input.getUsername()).isPresent()) {
-        throw new RegistrationException("Username already exists");
-    }
-
-    if (userRepository.findByEmail(input.getEmail()).isPresent()) {
-        throw new RegistrationException("Email already exists");
-    }
-
-    AppUser user = new AppUser(input.getUsername(), input.getEmail(), passwordEncoder.encode(input.getPassword()));
-    user.setVerificationCode(generateVerificationCode());
-    user.setVerificationCodeExpiresAt(LocalDateTime.now().plusMinutes(15));
-    user.setEnabled(false);
-    sendVerificationEmail(user);
-    return userRepository.save(user);
-}
-
-    public AppUser authenticate(LoginUserDto input) {
-        AppUser user = userRepository.findByEmail(input.getEmail())
-                .orElseThrow(() -> new RuntimeException("User not found"));
-
-        if (!user.isEnabled()) {
-            throw new RuntimeException("Account not verified. Please verify your account.");
+    public AppUser signup(RegisterUserDto input) {
+        if (userRepository.findByUsername(input.getUsername()).isPresent()) {
+            throw new RegistrationException("Username already exists");
         }
-        authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(
-                        input.getEmail(),
-                        input.getPassword()
-                )
-        );
+        if (userRepository.findByEmail(input.getEmail()).isPresent()) {
+            throw new RegistrationException("Email already exists");
+        }
 
-        return user;
+        AppUser user = new AppUser(input.getUsername(), input.getEmail(), passwordEncoder.encode(input.getPassword()));
+        user.setVerificationCode(generateVerificationCode());
+        user.setVerificationCodeExpiresAt(LocalDateTime.now().plusMinutes(15));
+        user.setEnabled(false);
+        sendVerificationEmail(user);
+        return userRepository.save(user);
+    }
+
+    public AppUser authenticate(LoginUserDto input, String clientIp) {
+        if (isBlocked(clientIp)) {
+            throw new RuntimeException("Too many attempts. Please wait 1 minute.");
+        }
+
+        try {
+            AppUser user = userRepository.findByEmail(input.getEmail())
+                    .orElseThrow(() -> new RuntimeException("User not found"));
+
+            if (!user.isEnabled()) {
+                throw new RuntimeException("Account not verified. Please verify your account.");
+            }
+
+            authenticationManager.authenticate(
+                    new UsernamePasswordAuthenticationToken(
+                            input.getEmail(),
+                            input.getPassword()
+                    )
+            );
+
+            lockoutCache.remove(clientIp);
+            return user;
+
+        } catch (Exception e) {
+            registerFailedAttempt(clientIp);
+            throw e;
+        }
+    }
+
+    private boolean isBlocked(String ip) {
+        LockoutInfo info = lockoutCache.get(ip);
+        if (info == null) return false;
+
+        if (info.attempts >= MAX_ATTEMPTS) {
+            if (LocalDateTime.now().isBefore(info.lockoutEndTime)) {
+                return true;
+            }
+            lockoutCache.remove(ip);
+        }
+        return false;
+    }
+
+    private void registerFailedAttempt(String ip) {
+        LockoutInfo info = lockoutCache.getOrDefault(ip, new LockoutInfo());
+        info.attempts++;
+        if (info.attempts >= MAX_ATTEMPTS) {
+            info.lockoutEndTime = LocalDateTime.now().plusMinutes(LOCKOUT_DURATION_MINUTES);
+        }
+        lockoutCache.put(ip, info);
+    }
+
+    private static class LockoutInfo {
+        int attempts = 0;
+        LocalDateTime lockoutEndTime = LocalDateTime.now();
     }
 
     public void verifyUser(VerifyUserDto input) {
@@ -104,7 +150,7 @@ public class AuthenticationService {
         }
     }
 
-    private void sendVerificationEmail(AppUser user) { //TODO: Update with company logo
+    private void sendVerificationEmail(AppUser user) {
         String subject = "Account Verification";
         String verificationCode = "VERIFICATION CODE " + user.getVerificationCode();
         String htmlMessage = "<html>"
@@ -123,10 +169,10 @@ public class AuthenticationService {
         try {
             emailService.sendVerificationEmail(user.getEmail(), subject, htmlMessage);
         } catch (MessagingException e) {
-            // Handle email sending exception
             e.printStackTrace();
         }
     }
+
     private String generateVerificationCode() {
         Random random = new Random();
         int code = random.nextInt(900000) + 100000;
