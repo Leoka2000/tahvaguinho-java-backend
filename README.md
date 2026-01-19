@@ -83,7 +83,7 @@ Authenticates credentials and returns a Bearer token. This endpoint includes pro
 
 ---
 
-## 👤 User Management
+##  User Management
 **Base Path:** `/users`
 **Header Required:** `Authorization: Bearer <JWT_TOKEN>`
 
